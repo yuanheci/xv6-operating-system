@@ -64,6 +64,7 @@ ls(char *path)
         continue;
       }
       printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, st.size);
+        // printf("%s %d %d %d\n", buf, st.type, st.ino, st.size);   //这样就变成了全路径
     }
     break;
   }
