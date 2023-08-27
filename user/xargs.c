@@ -17,9 +17,13 @@ int main(int argc, char *argv[]){
             buf[idx] = '\0';  //!!关键
             int pid = fork();
             if(pid == 0){
-                char* s[] = {"grep", argv[2], buf, 0};  //argv[2]就是pattern...
-                exec("grep", s);
-                printf("exec grep failed!\n");
+                // char* s[] = {"grep", argv[2], buf, 0};  //argv[2]就是pattern...
+                char *s[10];
+                int idx = 0;
+                for(int i = 1; i < argc; i++) s[idx++] = argv[i];
+                s[idx++] = buf, s[idx] = 0;
+                exec(argv[1], s);
+                printf("exec failed!\n");
                 exit(1);
             }
             else{
