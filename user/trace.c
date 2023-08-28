@@ -14,7 +14,7 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  if (trace(atoi(argv[1])) < 0) {
+  if (trace(atoi(argv[1])) < 0) {   //设置跟踪这个掩码对应的系统调用(修改)
     fprintf(2, "%s: trace failed\n", argv[0]);
     exit(1);
   }

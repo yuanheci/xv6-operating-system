@@ -277,6 +277,8 @@ fork(void)
 
   np->parent = p;
 
+  np->mask = p->mask;   //复制trace_syscall掩码
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 

@@ -95,3 +95,13 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+//内核态syscall调用了sys_trace，用argint获取用户的输入参数，也就是trace掩码（存放在寄存器a0中）
+//用来给进程设置trace掩码
+uint64 sys_trace(int mask){
+    int n;
+    if(argint(0, &n) < 0)
+        return -1;
+    myproc()->mask = n;
+    return 0;
+}
