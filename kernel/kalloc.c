@@ -35,7 +35,7 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)  //在这里建立了链表，导致结点间隔是一页(4096bytes)
     kfree(p);
 }
 
@@ -77,6 +77,19 @@ kalloc(void)
   release(&kmem.lock);
 
   if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
+    memset((char*)r, 5, PGSIZE); // fill with junk  PGSIZE=4096
   return (void*)r;
 }
+
+uint64 getfreebytes(){
+    struct run* it = kmem.freelist;
+    int cnt = 0;
+    acquire(&kmem.lock);
+    while(it != 0){
+        cnt += 4096;   //一页固定是4096字节
+        it = it->next;
+    }
+    release(&kmem.lock);
+    return cnt;
+}
+

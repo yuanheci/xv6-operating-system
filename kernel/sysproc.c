@@ -6,6 +6,8 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
+#include "kalloc.h"
 
 uint64
 sys_exit(void)
@@ -98,10 +100,23 @@ sys_uptime(void)
 
 //内核态syscall调用了sys_trace，用argint获取用户的输入参数，也就是trace掩码（存放在寄存器a0中）
 //用来给进程设置trace掩码
-uint64 sys_trace(int mask){
+uint64 sys_trace(void){
     int n;
     if(argint(0, &n) < 0)
         return -1;
     myproc()->mask = n;
+    return 0;
+}
+
+uint64 sys_sysinfo(void){
+    struct proc *p = myproc();
+    uint64 st;
+    struct sysinfo ksf;
+    ksf.freemem = getfreebytes(), ksf.nproc = getprocnum();
+    if(argaddr(0, &st) < 0)
+        return -1;
+    int res = copyout(p->pagetable, st, (char*)&ksf, sizeof ksf);
+    // printf("res = %d\n", res);
+    if(res < 0) return -1;
     return 0;
 }
