@@ -333,6 +333,7 @@ sfence_vma()
 #define PTE_U (1L << 4) // 1 -> user can access
 
 // shift a physical address to the right place for a PTE.
+// 注意：RISC-V物理地址是56位，所以这里>>12就是44位的PPN，<<10就是最后的Flags
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
 
 #define PTE2PA(pte) (((pte) >> 10) << 12)

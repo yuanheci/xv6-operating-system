@@ -74,18 +74,41 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   if(va >= MAXVA)
     panic("walk");
 
-  for(int level = 2; level > 0; level--) {
-    pte_t *pte = &pagetable[PX(level, va)];
+  //PX(level, va)返回的是0 ~ (1 << 9 - 1)范围内的数
+  //pagetable是指向512个PTE的首级目录树指针,因此得到其中一项PTE
+  //依赖于直接映射到内核虚拟地址空间中的物理内存
+  //传进来的pagetable是最高级
+  for(int level = 2; level > 0; level--) {   //模仿RISC-V三级分页硬件
+    pte_t *pte = &pagetable[PX(level, va)];  
     if(*pte & PTE_V) {
-      pagetable = (pagetable_t)PTE2PA(*pte);
+      //这里得到下一级的物理地址，由于采用直接映射，因此也等于虚拟地址
+      pagetable = (pagetable_t)PTE2PA(*pte); 
     } else {
+      //pagetable = (pde_t*)kalloc())这里用kalloc分配了一页(4096bytes)
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
-  return &pagetable[PX(0, va)];
+  return &pagetable[PX(0, va)];  //此时pagetable对应第三级页表
+}
+
+void vmprint(pagetable_t pagetable, int d){  //从1开始
+    if(d == 1) printf("page table %p\n", pagetable);
+    for(int i = 0; i < 512; i++){
+        pte_t pte = pagetable[i];
+        if((pte & PTE_V) == 0) continue;
+        for(int j = 0; j < d; j++) {
+            printf("..");
+            if(j < d - 1) printf(" ");
+        }
+        printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
+        if((pte & (PTE_R | PTE_W | PTE_X)) == 0){  //说明有下级页表
+            uint64 child = PTE2PA(pte);
+            vmprint((pagetable_t)child, d + 1);
+        }
+    }
 }
 
 // Look up a virtual address, return the physical address,
@@ -145,6 +168,9 @@ kvmpa(uint64 va)
 // physical addresses starting at pa. va and size might not
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
+//perm是一共10位的标志位
+//调用的时候：mappages(kernel_pagetable, va, sz, pa, perm)
+//kernel_pagetable是物理地址
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
