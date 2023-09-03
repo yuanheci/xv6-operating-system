@@ -47,6 +47,30 @@ kvminit()
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
+//创建进程时需要调用该函数，产生一个内核页表，需要包含kernel_pg的所有内容
+pagetable_t kprocesspg(){
+    pagetable_t kp_pagetable = (pagetable_t) kalloc();
+    if(kp_pagetable == 0) return 0;
+
+    memset(kp_pagetable, 0, PGSIZE);
+    // uart registers
+    kpvmmap(kp_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+    // virtio mmio disk interface
+    kpvmmap(kp_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+    // CLINT
+    kpvmmap(kp_pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+    // PLIC
+    kpvmmap(kp_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+    // map kernel text executable and read-only.
+    kpvmmap(kp_pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+    // map kernel data and the physical RAM we'll make use of.
+    kpvmmap(kp_pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+    // map the trampoline for trap entry/exit to
+    // the highest virtual address in the kernel.
+    kpvmmap(kp_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+    return kp_pagetable;   
+}
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void
@@ -144,6 +168,13 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
     panic("kvmmap");
 }
 
+//用于进程专属的内核页表
+void kpvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm){
+    if(mappages(pagetable, va, sz, pa, perm) != 0){
+        panic("kpvmmap");
+    }
+}
+
 // translate a kernel virtual address to
 // a physical address. only needed for
 // addresses on the stack.
@@ -214,6 +245,30 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa);
+    }
+    *pte = 0;
+  }
+}
+
+void
+kpvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
+{
+  uint64 a;
+  pte_t *pte;
+
+  if((va % PGSIZE) != 0)
+    panic("uvmunmap: not aligned");
+
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){   //释放掉之前的kpvmmap中通过walk申请的物理内存
+    if((pte = walk(pagetable, a, 0)) == 0)
+      panic("uvmunmap: walk");
+    if((*pte & PTE_V) == 0)
+      panic("uvmunmap: not mapped");
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("uvmunmap: not a leaf");
+    if(do_free){
+      uint64 pa = PTE2PA(*pte);  //转成物理地址
       kfree((void*)pa);
     }
     *pte = 0;
@@ -297,6 +352,7 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 
 // Recursively free page-table pages.
 // All leaf mappings must already have been removed.
+//用户内存页释放，不能释放叶子因为叶子物理内存是共享的。
 void
 freewalk(pagetable_t pagetable)
 {
@@ -315,6 +371,23 @@ freewalk(pagetable_t pagetable)
   kfree((void*)pagetable);
 }
 
+//释放进程专属的内核页表，不释放叶子的物理内存
+void
+kpfreewalk(pagetable_t pagetable)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      kpfreewalk((pagetable_t)child);
+      pagetable[i] = 0;
+    } 
+  }
+  kfree((void*)pagetable);  
+}
+
 // Free user memory pages,
 // then free page-table pages.
 void
@@ -323,6 +396,13 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   if(sz > 0)
     uvmunmap(pagetable, 0, PGROUNDUP(sz)/PGSIZE, 1);
   freewalk(pagetable);
+}
+
+//释放掉进程独有的内核页表所占的物理内存（通过kpvmunmap)和页表本身(通过kpfreewalk)
+void kpvmfree(pagetable_t pagetable, uint64 sz){  
+    if(sz > 0)
+        kpvmunmap(pagetable, 0, PGROUNDUP(sz) / PGSIZE, 1);   //释放该页表映射的所有物理内存,从该进程的虚拟地址0开始
+    kpfreewalk(pagetable);
 }
 
 // Given a parent process's page table, copy

@@ -20,6 +20,7 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern char etext[];  //kernel.ld
 
 // initialize the proc table at boot time.
 void
@@ -114,12 +115,27 @@ found:
   }
 
   // An empty user page table.
-  p->pagetable = proc_pagetable(p);
+  p->pagetable = proc_pagetable(p); //返回的是父进程页表下的虚拟地址，为什么子进程能直接用
   if(p->pagetable == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+
+  //进程专属的内核页表
+  p->kp_pagetable = kprocesspg();
+  if(p->kp_pagetable == 0){
+    freeproc(p);   //需要修改该函数！
+    release(&p->lock);
+    return 0;
+  }
+
+  //建立进程内核页表对该进程kstack的映射
+  uint64 va = KSTACK((int)(p - proc));  //该进程kstack的起始虚拟地址
+  uint64 pa = kvmpa(va);  //转化成物理地址
+  //开始映射
+  kpvmmap(p->kp_pagetable, va, pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -150,6 +166,11 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  if(p->kp_pagetable) {
+    proc_freekpagetable(p->kp_pagetable, p->sz);  //内存释放有一点疑   //内核栈也会释放
+    p->kp_pagetable = 0;
+  }
+  if(p->kstack) p->kstack = 0;
 }
 
 // Create a user page table for a given process,
@@ -195,6 +216,21 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+//释放进程专属的内核页表
+void proc_freekpagetable(pagetable_t pagetable, uint64 sz){
+    //释放掉IO设备映射的物理内存（实际这些只需要取消映射即可，不用释放物理内存，因为这些物理内存是所有进程共享的
+    // 当前进程不用了要释放了，只把自己的使用映射删掉就行了~）
+    kpvmunmap(pagetable, UART0, 1, 0);
+    kpvmunmap(pagetable, VIRTIO0, 1, 0);
+    kpvmunmap(pagetable, CLINT, 0x10000 / PGSIZE, 0);
+    kpvmunmap(pagetable, PLIC, 0x400000 / PGSIZE, 0);
+    kpvmunmap(pagetable, KERNBASE, ((uint64)etext-KERNBASE) / PGSIZE, 0);
+    kpvmunmap(pagetable, (uint64)etext, (PHYSTOP-(uint64)etext) / PGSIZE, 0);
+    kpvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    //释放掉进程独有的内核页表所占的物理内存（通过kpvmunmap)和页表本身(通过kpfreewalk)
+    kpvmfree(pagetable, sz);
+}
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -218,7 +254,7 @@ userinit(void)
   
   // allocate one user page and copy init's instructions
   // and data into it.
-  uvminit(p->pagetable, initcode, sizeof(initcode));
+  uvminit(p->pagetable, initcode, sizeof(initcode));  //user text段
   p->sz = PGSIZE;
 
   // prepare for the very first "return" from kernel to user.
@@ -233,6 +269,7 @@ userinit(void)
   release(&p->lock);
 }
 
+//实现sbrk  sbrk是一个用于进程减少或增长其内存的系统调用
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
 int
@@ -475,9 +512,14 @@ scheduler(void)
         c->proc = p;
         swtch(&c->context, &p->context);
 
+        //设置satp reg的值，切换页表
+        w_satp(MAKE_SATP(p->kp_pagetable));
+        sfence_vma();   //刷新TLB
+
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+        kvminithart();   //切换回原始全局内核页表
 
         found = 1;
       }
