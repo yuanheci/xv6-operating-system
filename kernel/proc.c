@@ -115,7 +115,7 @@ found:
   }
 
   // An empty user page table.
-  p->pagetable = proc_pagetable(p); //返回的是父进程页表下的虚拟地址，为什么子进程能直接用
+  p->pagetable = proc_pagetable(p); 
   if(p->pagetable == 0){
     freeproc(p);
     release(&p->lock);
@@ -133,6 +133,7 @@ found:
   //建立进程内核页表对该进程kstack的映射
   uint64 va = KSTACK((int)(p - proc));  //该进程kstack的起始虚拟地址
   uint64 pa = kvmpa(va);  //转化成物理地址
+  memset((void*)pa, 0, PGSIZE);   //刷新清空kstack
   //开始映射
   kpvmmap(p->kp_pagetable, va, pa, PGSIZE, PTE_R | PTE_W);
   p->kstack = va;
@@ -167,7 +168,7 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->state = UNUSED;
   if(p->kp_pagetable) {
-    proc_freekpagetable(p->kp_pagetable, p->sz);  //内存释放有一点疑   //内核栈也会释放
+    proc_freekpagetable(p->kp_pagetable, p->sz);  //内核栈也会释放
     p->kp_pagetable = 0;
   }
   if(p->kstack) p->kstack = 0;
@@ -256,6 +257,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));  //user text段
   p->sz = PGSIZE;
+  kpvmcopy(p->pagetable, p->kp_pagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -279,12 +281,21 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
-  if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+  if(n > 0){   //用户进程的va是0开始的，所以sz就代表从0开始的大小
+    //不能超过PLIC
+    if((sz + n > PLIC) || (sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    if(kpvmcopy(p->pagetable, p->kp_pagetable, p->sz, sz) != 0)
+      return -1;
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    if(sz < p->sz){
+        int npages = (PGROUNDUP(p->sz) - PGROUNDUP(sz)) / PGSIZE;
+        kpvmunmap(p->kp_pagetable, PGROUNDUP(sz), npages, 0); //只取消映射即可
+    }
+    w_satp(MAKE_SATP(p->kp_pagetable));   //这里同exec 
+    sfence_vma();   
   }
   p->sz = sz;
   return 0;
@@ -310,7 +321,15 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+
   np->sz = p->sz;
+
+  //同步给子进程的kp_pagetable
+  if(kpvmcopy(np->pagetable, np->kp_pagetable, 0, np->sz) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
 
   np->parent = p;
 
@@ -510,11 +529,13 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        swtch(&c->context, &p->context);
 
-        //设置satp reg的值，切换页表
+        //设置satp reg的值，切换页表。注意这里必须要切换页表再调用swtch切换寄存器
+        //否则会报错kerneltrap
         w_satp(MAKE_SATP(p->kp_pagetable));
         sfence_vma();   //刷新TLB
+
+        swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.

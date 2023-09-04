@@ -114,7 +114,14 @@ exec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
+
   proc_freepagetable(oldpagetable, oldsz);
+
+  if(kpvmcopy(pagetable, p->kp_pagetable, 0, p->sz) != 0)
+    goto bad;
+
+  w_satp(MAKE_SATP(p->kp_pagetable));
+  sfence_vma();   //刷新TLB
 
   if(p->pid==1) vmprint(p->pagetable, 1);
     // if(p->pid==1) vmprint(p->kp_pagetable, 1);
