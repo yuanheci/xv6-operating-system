@@ -132,3 +132,14 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void backtrace(void){
+    uint64 t = r_fp();  //s0寄存器的值
+    uint64 up = PGROUNDUP(t);
+    printf("backtrace:\n");
+    while(t < up){
+        uint64 ra = *(uint64*)(t - 8), fp = *(uint64*)(t - 16);
+        printf("%p\n", ra);
+        t = fp;
+    }
+}

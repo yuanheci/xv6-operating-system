@@ -1,0 +1,13 @@
+引出几个我在实验中引出的问题:
+
+1.在usertrap中的*p->pre_trapframe = *p->trapframe能不能放在别的地方？（比如放在syscall()上边）
+
+U:不能放在syscall()的上方，因为如果这样，那我们触发sigreturn系统调用时，在上方pre_trapframe中保存的就是这次系统调用的返回地址了，而不能回到触发时钟中断的地址.
+
+2.要不要对pre_trapframe->epc+4?
+
+U:不要，因为在下方判断which_dev ==2的上方，就已经将epc+4了，所以这里pre_trapframe->epc中保存的就已经是正确的返回地址了.
+
+3.保存上一个栈帧的地方在哪里?
+
+U:在每一次触发handler的地方，因为只有在这里，我们才会修改epc指针，所以再修改之前我们保存trapframe，这样当触发sigreturn系统调用时就会使用正确的trapframe了。

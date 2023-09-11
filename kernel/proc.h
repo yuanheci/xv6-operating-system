@@ -95,6 +95,12 @@ struct proc {
   int pid;                     // Process ID
 
   // these are private to the process, so p->lock need not be held.
+  int tick;
+  int interval;
+  uint64 handler;
+  struct trapframe *prev_trapframe;
+  int inalarm;
+
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table

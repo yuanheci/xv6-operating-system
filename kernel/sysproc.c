@@ -70,6 +70,7 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+  backtrace();
   return 0;
 }
 
@@ -94,4 +95,23 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+//调用后表示开启alarm功能
+uint64
+sys_sigalarm(void){   //调用形式：sigalarm(n, fn)，获取参数值
+    if(argint(0, &myproc()->interval) < 0 || 
+        argaddr(1, &myproc()->handler) < 0)
+        return -1;
+    return 0;
+}
+
+//恢复用户寄存器
+uint64
+sys_sigreturn(void){
+    struct proc *p = myproc();
+    *p->trapframe = *p->prev_trapframe;
+    p->inalarm = 0;
+    p->tick = 0;
+    return 0;
 }
