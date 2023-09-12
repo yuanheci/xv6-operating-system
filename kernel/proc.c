@@ -300,6 +300,25 @@ fork(void)
   return pid;
 }
 
+
+int lazy_allocation(uint64 va){
+    struct proc *p = myproc();  
+    if(va >= p->sz){
+        return -1;
+    }
+    if(va <= PGROUNDDOWN(p->trapframe->sp)) return -1;  //va below guard page
+    uint64 mem = (uint64)kalloc();
+    if(mem == 0) return -1;
+    memset((void*)mem, 0, PGSIZE);
+    va = PGROUNDDOWN(va);
+    if(mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_R|PTE_U) != 0){
+        kfree((void*)mem);
+        uvmdealloc(p->pagetable, va + PGSIZE, va);  
+        return -1;
+    }
+    return 0;
+}
+
 // Pass p's abandoned children to init.
 // Caller must hold p->lock.
 void
