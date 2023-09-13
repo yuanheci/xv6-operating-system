@@ -23,10 +23,17 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct{
+    struct spinlock lock;
+    uint page_cnt[PHYSTOP / PGSIZE];  //该页面的用户页表数的“引用计数”
+}kcow;
+
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&kcow.lock, "kcow");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -35,8 +42,10 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
+    kcow.page_cnt[(uint64)p / PGSIZE] = 1;
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by v,
@@ -50,6 +59,13 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  acquire(&kcow.lock);
+  if(--kcow.page_cnt[(uint64)pa / PGSIZE] > 0) {
+    release(&kcow.lock);
+    return;  //不用真正释放
+  }
+  release(&kcow.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -76,7 +92,24 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    acquire(&kcow.lock);
+    kcow.page_cnt[(uint64)r / PGSIZE] = 1;
+    release(&kcow.lock);
+  }
+
   return (void*)r;
 }
+
+void opref(uint64 pa, int num){
+    if(pa >= PHYSTOP){
+        panic("opref: pa too big");
+    }
+    acquire(&kcow.lock);
+    kcow.page_cnt[pa / PGSIZE] += num;
+    release(&kcow.lock);
+}
+
+
+

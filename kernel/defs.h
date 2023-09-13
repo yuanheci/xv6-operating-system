@@ -63,6 +63,8 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+void            opref(uint64, int);
+int             cowalloc(pagetable_t, uint64);
 
 // log.c
 void            initlog(int, struct superblock*);

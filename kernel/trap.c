@@ -10,6 +10,7 @@ struct spinlock tickslock;
 uint ticks;
 
 extern char trampoline[], uservec[], userret[];
+extern uint64 page_cnt[];
 
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
@@ -67,9 +68,14 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+  } else if(r_scause() == 15){ //page fault--write
+    //得到虚拟地址，然后转换成pte，判断是否为COW
+    uint64 va = r_stval();
+    if(cowalloc(p->pagetable, va) != 0) p->killed = 1;
+  }else {
+    // printf("scause = %d\n", r_scause());
+    // printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    // printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
