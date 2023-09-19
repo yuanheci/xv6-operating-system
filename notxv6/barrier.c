@@ -30,7 +30,18 @@ barrier()
   // Block until all threads have called barrier() and
   // then increment bstate.round.
   //
-  
+  pthread_mutex_lock(&bstate.barrier_mutex); // acquire lock
+  bstate.nthread++;  //拿到锁了
+  if(bstate.nthread == nthread) {
+    bstate.nthread = 0;
+    bstate.round++;
+    pthread_cond_broadcast(&bstate.barrier_cond);   //全部唤醒，醒来时会重新获取lock！
+  }
+  else pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);   //释放锁，在cond上进入等待
+  //所以走到这的两种情况：
+  //1、是最后一个nthread，所以需要释放锁
+  //2、是从cond上被唤醒的，由于会重新获取锁，因此也释放掉（让其他唤醒的进程也能获取）
+  pthread_mutex_unlock(&bstate.barrier_mutex);  
 }
 
 static void *
