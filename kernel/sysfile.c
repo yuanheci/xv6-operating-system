@@ -286,11 +286,13 @@ create(char *path, short type, short major, short minor)
 uint64
 sys_open(void)
 {
-  char path[MAXPATH];
+  char path[MAXPATH], target[MAXPATH];
   int fd, omode;
   struct file *f;
   struct inode *ip;
   int n;
+
+  memset(target, 0, MAXPATH);
 
   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
     return -1;
@@ -320,6 +322,27 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  int depth = 0;
+  while(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){  //需要递归跟随
+    if(readi(ip, 0, (uint64)target, 0, MAXPATH) == -1){
+        iunlockput(ip);
+        end_op();
+        return -1;
+    }
+    iunlockput(ip);
+    //通过target得到对应的inode，使用namei函数
+    if((ip = namei(target)) == 0){  //没找到
+        end_op();
+        return -1;
+    }
+    ilock(ip);
+    if(++depth > 10){
+        iunlockput(ip);
+        end_op();
+        return -1;
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -483,4 +506,37 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+int sys_symlink(char *target, char *path){
+    char kpath[MAXPATH], ktarget[MAXPATH];
+    memset(kpath, 0, MAXPATH);
+    memset(ktarget, 0, MAXPATH);
+    int ret = 0, n = 0;
+    struct inode *ip;
+
+    if((n = argstr(0, ktarget, MAXPATH)) < 0) return -1;
+    if((n = argstr(1, kpath, MAXPATH)) < 0) return -1;
+
+    begin_op();
+    if((ip = namei(kpath)) != 0) {   //已经存在
+        ret = -1;
+        goto fail;
+    }
+
+    ip = create(kpath, T_SYMLINK, 0, 0);
+    if(ip == 0) return -1;
+
+    //将软链接信息写入这个新inode
+    if(writei(ip, 0, (uint64)ktarget, 0, MAXPATH) == -1){
+        ret = -1;
+        goto fail;
+    }
+
+    //释放create中遗留下来的锁
+    iunlockput(ip);
+
+fail:
+    end_op();
+    return ret;
 }
