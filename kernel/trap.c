@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -13,6 +14,8 @@ extern char trampoline[], uservec[], userret[];
 
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
+
+int mmap_handler(int va, int cause);
 
 extern int devintr();
 
@@ -27,6 +30,70 @@ void
 trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
+}
+
+struct file {
+  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
+  int ref; // reference count
+  char readable;
+  char writable;
+  struct pipe *pipe; // FD_PIPE
+  struct inode *ip;  // FD_INODE and FD_DEVICE
+  uint off;          // FD_INODE
+  short major;       // FD_DEVICE
+};
+
+//处理mmap懒分配导致的页面错误
+//va: 页面故障虚拟地址
+//cause: 页面故障原因
+//0成功, -1失败
+
+int mmap_handler(int va, int cause){
+    int i;
+    struct proc *p = myproc();
+    //查找是哪个vma
+    for(i = 0; i < NVMA; i++){
+        if(p->vma[i].used && va >= p->vma[i].addr && va <= p->vma[i].addr + p->vma[i].len - 1){
+            break;
+        }
+    }
+    if(i == NVMA) return -1;
+
+    int pte_flags = PTE_U;
+    if(p->vma[i].prot & PROT_READ) pte_flags |= PTE_R;
+    if(p->vma[i].prot & PROT_WRITE) pte_flags |= PTE_W;
+    if(p->vma[i].prot & PROT_EXEC) pte_flags |= PTE_X;
+
+    struct file *vf = p->vma[i].vfile;
+
+    //读导致的页面错误
+    if(cause == 13 && vf->readable == 0) return -1;
+    //写导致的页面错误
+    if(cause == 15 && vf->writable == 0) return -1;
+
+    void *pa = kalloc();
+    if(pa == 0) return -1;
+    memset(pa, 0, PGSIZE);
+
+    //读取文件内容
+    ilock(vf->ip);
+
+    int offset = p->vma[i].offset + va - p->vma[i].addr;
+    int readbytes = readi(vf->ip, 0, (uint64)pa, offset, PGSIZE);  //读取inode内容
+    if(readbytes == 0) {
+        iunlock(vf->ip);
+        kfree(pa);
+        return -1;
+    }
+
+    iunlock(vf->ip);
+
+    //添加页面映射
+    if(mappages(p->pagetable, va, PGSIZE, (uint64)pa, pte_flags) != 0){
+        kfree(pa);
+        return -1;
+    }
+    return 0;
 }
 
 //
@@ -49,8 +116,10 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
+
+  int cause = r_scause();
   
-  if(r_scause() == 8){
+  if(cause == 8){
     // system call
 
     if(p->killed)
@@ -67,6 +136,12 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(cause == 13 || cause == 15){  //读或写引起的缺页
+    uint64 fva = r_stval();   //引发错误的va
+    if(fva > PGROUNDUP(p->trapframe->sp) - 1 && fva < p->sz){
+        if(mmap_handler(r_stval(), cause) != 0) p->killed = 1;
+    }
+    else p->killed = 1;
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
